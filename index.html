@@ -533,7 +533,7 @@ function bloqueEnvio(p) {
     ${envioCampos('d', lima, p)}
     <button class="btn sec mt" data-act="guardarEnvio">Guardar datos de envío</button>
     ${p.dni ? '<button class="btn mt" data-act="verFicha">Ver ficha de envío</button>' : ''}
-    ${p.enlace ? '<button class="btn ghost mt" data-act="mandarForm">Enviar formulario por WhatsApp</button>' : ''}</div>`;
+    ${p.enlace ? '<button class="btn ghost mt" data-act="mandarForm">Enviar formulario por WhatsApp</button><div class="actions"><button class="btn sec sm" data-act="copiarForm">Copiar enlace</button><button class="btn sec sm" data-act="compartirForm">Compartir enlace</button></div>' : ''}</div>`;
 }
 function fichaDePedido(p) {
   return {row:p.row, pedido:p.pedido, nombre:p.nombre, celular:p.tel, dni:p.dni, recibe:p.recibe, dniRecibe:p.dniRecibe, ciudad:p.ciudad, provincia:p.prov,
@@ -545,6 +545,17 @@ function mandarFormulario(p) {
   if (!cel) return toast('Este pedido no tiene celular', 'warn');
   const txt = 'Hola ' + String(p.nombre || '').trim().split(' ')[0] + ', gracias por tu compra en Vanta Perú 🛍️\n\nTu número de pedido es ' + (p.pedido || '') + '. Para coordinar tu envío, completa tus datos aquí:\n' + p.enlace;
   window.open('https://wa.me/' + cel + '?text=' + encodeURIComponent(txt), '_blank');
+}
+function textoForm(p) { return 'Hola ' + String(p.nombre || '').trim().split(' ')[0] + ', gracias por tu compra en Vanta Perú 🛍️\n\nTu número de pedido es ' + (p.pedido || '') + '. Para coordinar tu envío, completa tus datos aquí:\n' + p.enlace; }
+async function copiarEnlace(txt) {
+  try { await navigator.clipboard.writeText(txt); toast('Enlace copiado'); return; } catch (e) {}
+  const t = document.createElement('textarea'); t.value = txt; document.body.appendChild(t); t.select();
+  try { document.execCommand('copy'); toast('Enlace copiado'); } catch (x) { toast('No se pudo copiar', 'warn'); }
+  t.remove();
+}
+async function compartirEnlace(p) {
+  if (navigator.share) { try { await navigator.share({text:textoForm(p)}); } catch (e) {} return; }
+  copiarEnlace(textoForm(p));
 }
 function nuevoPedido() {
   const ov = sheet('Nuevo pedido', `<div class="block"><h3>Cliente</h3><div class="g2"><div><label>Nombre completo</label><input id="n_nom"></div><div><label>Celular</label><input id="n_tel" type="tel" placeholder="987654321"></div></div></div>
@@ -689,6 +700,8 @@ const ACT = {
   }),
   verFicha: () => { const D = leer(), p = getP(D.id); if (p) abrirFichaObj(fichaDePedido(p)); },
   mandarForm: () => { const p = getP(S.D.id); if (p) mandarFormulario(p); },
+  copiarForm: () => { const p = getP(S.D.id); if (p) copiarEnlace(p.enlace); },
+  compartirForm: () => { const p = getP(S.D.id); if (p) compartirEnlace(p); },
   cerrar: () => { S.view = null; S.D = null; render(); window.scrollTo(0, 0); },
   guardar: () => conBoton('guardar', async () => { await guardarD(); pintarDetalle(); toast('Guardado en tu hoja'); }),
   adelanto: () => conBoton('adelanto', async () => { const pg = nuevoPago('a'); leer(); S.D.pagos.push(pg); try { await guardarD(); } catch (e) { S.D.pagos.pop(); throw e; } pintarDetalle(); toast('Adelanto registrado'); await comprobante(); }),
