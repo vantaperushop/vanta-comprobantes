@@ -208,13 +208,18 @@ function cuentas(p) {
   const precio = precioTotal(p.precio), total = n(p.total) > 0 ? n(p.total) : precio, pagos = pagosDe(p), pagado = sum(pagos, x => x.monto);
   return {precio, envio:Math.max(0, r2(total - precio)), total, pagos, pagado, resta:Math.max(0, r2(total - pagado))};
 }
+/* archivados: a mano, o solos si pasan 7 días sin adelanto */
+const DIAS_ARCHIVO = 7;
+function fechaDe(p) { if (p.fecha) return Number(p.fecha); const t = Date.parse(String(p.id || '').replace(' ', 'T')); return isNaN(t) ? 0 : t; }
+function autoArch(p) { const f = Math.max(fechaDe(p), Number((p.comp || {}).restaurado) || 0); return f > 0 && Date.now() - f >= DIAS_ARCHIVO * 864e5; }
 function grupo(p) {
   const e = String(p.estado || '').trim().toLowerCase();
   if (NOVER.includes(e)) return null;
+  if (e === 'archivado') return 'archivados';
   const c = cuentas(p);
   if (e === 'pagado' || e === 'pagado el total' || (c.pagos.length && c.resta <= 0)) return 'pagados';
   if (e === 'adelantado' || e === 'monto adelantado' || c.pagos.length) return 'adelantados';
-  return 'atender';
+  return autoArch(p) ? 'archivados' : 'atender';
 }
 function caja(x) {
   if (x.resta <= 0) return {t:'Pagado en su totalidad', s:'Tu pedido no tiene saldo pendiente.'};
@@ -291,9 +296,10 @@ function vPedidos() {
   const vis = S.pedidos.filter(p => grupo(p)), cnt = g => vis.filter(p => grupo(p) === g).length;
   const q = S.q.toLowerCase().trim();
   const list = vis.filter(p => grupo(p) === S.fil && (!q || [p.nombre, p.tel, p.producto, p.sku, p.ciudad].join(' ').toLowerCase().includes(q))).sort((a, b) => b.row - a.row);
-  return `<button class="btn" data-act="nuevo" style="margin-bottom:10px">+ Nuevo pedido</button><div class="chips">${[['atender', 'Por atender'], ['adelantados', 'Adelantados'], ['pagados', 'Pagados']].map(([k, l]) => `<button class="chip ${S.fil === k ? 'on' : ''}" data-act="fil" data-v="${k}">${l} (${cnt(k)})</button>`).join('')}</div>
+  return `<button class="btn" data-act="nuevo" style="margin-bottom:10px">+ Nuevo pedido</button><div class="chips">${[['atender', 'Por atender'], ['adelantados', 'Adelantados'], ['pagados', 'Pagados'], ['archivados', 'Archivados']].map(([k, l]) => `<button class="chip ${S.fil === k ? 'on' : ''}" data-act="fil" data-v="${k}">${l} (${cnt(k)})</button>`).join('')}</div>
   <input class="search" id="q" placeholder="Buscar por nombre, teléfono o producto" value="${esc(S.q)}">
-  ${list.map(p => { const c = cuentas(p), g = grupo(p), est = p.estado || 'Nuevo'; return `<div class="card" data-act="abrir" data-id="${esc(p.id)}"><div class="ctop"><div style="min-width:0"><div class="t">${esc(p.nombre || 'Sin nombre')}</div><div class="s">${p.pedido ? esc(p.pedido) + ' · ' : ''}${esc(nombresTxt(p.producto))}${p.ciudad || p.prov ? ' · ' + esc(p.ciudad || p.prov) : ''}</div></div><div class="amt">${S_(c.total)}</div></div><span class="badge ${g === 'pagados' ? 'b-ok' : g === 'adelantados' ? 'b-blue' : 'b-warn'}">${esc(est)}</span>${g === 'adelantados' ? `<span class="s" style="margin-left:6px">Saldo pendiente ${S_(c.resta)}</span>` : ''}</div>`; }).join('') || '<div class="empty">No hay pedidos aquí.</div>'}`;
+  ${S.fil === 'archivados' ? '<div class="hint" style="margin:0 0 10px">Pedidos archivados a mano o que pasaron ' + DIAS_ARCHIVO + ' días sin adelanto. Ábrelos para restaurarlos o registrar su adelanto.</div>' : ''}
+  ${list.map(p => { const c = cuentas(p), g = grupo(p), est = g === 'archivados' ? (String(p.estado || '').trim().toLowerCase() === 'archivado' ? 'Archivado' : 'Archivado · ' + DIAS_ARCHIVO + '+ días sin adelanto') : (p.estado || 'Nuevo'); return `<div class="card" data-act="abrir" data-id="${esc(p.id)}"><div class="ctop"><div style="min-width:0"><div class="t">${esc(p.nombre || 'Sin nombre')}</div><div class="s">${p.pedido ? esc(p.pedido) + ' · ' : ''}${esc(nombresTxt(p.producto))}${p.ciudad || p.prov ? ' · ' + esc(p.ciudad || p.prov) : ''}</div></div><div class="amt">${S_(c.total)}</div></div><span class="badge ${g === 'pagados' ? 'b-ok' : g === 'adelantados' ? 'b-blue' : g === 'archivados' ? '' : 'b-warn'}">${esc(est)}</span>${g === 'adelantados' ? `<span class="s" style="margin-left:6px">Saldo pendiente ${S_(c.resta)}</span>` : ''}</div>`; }).join('') || '<div class="empty">No hay pedidos aquí.</div>'}`;
 }
 function vMas() {
   return `<div class="block"><h3>Conexión</h3><div class="hint" style="margin:0 0 10px">Conectado a tu hoja de Google (pestaña orders). Los pedidos cancelados, rechazados y con error no se muestran.</div><button class="btn sec" data-act="desconectar">Cambiar enlace o clave</button></div>
@@ -444,7 +450,8 @@ function pintarDetalle() {
   ${sinPagos ? `<div class="block"><h3>Adelanto</h3><label>Monto exacto (S/)</label><input id="a_mon" type="number" inputmode="decimal" step="0.01" value="29.00"><label>Método</label>${metodoHTML('a')}</div><button class="btn" data-act="adelanto">Registrar adelanto y generar comprobante</button>`
     : t.resta > 0 ? `<button class="btn" data-act="generar">Generar comprobante</button><div class="block mt"><h3>Registrar pago del saldo</h3><label>Monto (S/)</label><input id="b_mon" type="number" inputmode="decimal" step="0.01" value="${t.resta}"><label>Método</label>${metodoHTML('b')}<button class="btn sec mt" data-act="saldo">Guardar y generar comprobante final</button></div>`
     : `<button class="btn" data-act="generar">Generar comprobante final</button>`}
-  <button class="btn ghost mt" data-act="guardar">Guardar cambios</button>`;
+  <button class="btn ghost mt" data-act="guardar">Guardar cambios</button>
+  ${grupo(p) === 'archivados' ? '<button class="btn sec mt" data-act="restaurar">Restaurar pedido</button>' : '<button class="btn danger mt" data-act="archivar">Archivar pedido</button>'}`;
   const v = $('#view');
   chipsBind(v, 'f_ent', m => { S.D.modo = m; $('#w_ciu').style.display = m === 'shalom' ? 'block' : 'none'; $('#w_pers').style.display = m === 'pers' ? 'block' : 'none'; prev(); });
   if ($('#a_m')) S.metA = metodoBind(v, 'a');
@@ -725,6 +732,17 @@ async function comprobante() {
   });
 }
 
+async function archivarP(si) {
+  const p = getP(S.D.id); if (!p) return;
+  await conBoton(si ? 'archivar' : 'restaurar', async () => {
+    const j = await api('archivar', {id:p.id, row:p.row, archivar:si});
+    p.estado = j.estado;
+    if (j.restaurado) p.comp = Object.assign({}, p.comp || {}, {restaurado:j.restaurado});
+    if (!si) S.fil = 'atender';
+    ACT.cerrar(); toast(si ? 'Pedido archivado' : 'Pedido restaurado');
+  });
+}
+
 /* ---------- acciones ---------- */
 const ACT = {
   fil: (id, v) => { S.fil = v; render(); },
@@ -750,6 +768,8 @@ const ACT = {
   generar: () => conBoton('generar', async () => { await guardarD(); pintarDetalle(); await comprobante(); }),
   editPago: (id, v) => editPago(v),
   addItem: () => { leer(); S.D.items.push({nombre:'', precio:null}); pintarDetalle(); },
+  archivar: async () => { if (!await confirmar('¿Archivar este pedido?', 'Sale de la lista. Lo encuentras en Archivados y puedes restaurarlo cuando quieras.')) return; await archivarP(true); },
+  restaurar: () => archivarP(false),
   delItem: (id, v) => { leer(); if (S.D.items.length > 1) S.D.items.splice(+v, 1); pintarDetalle(); },
   quitarFoto: () => { const D = leer(); ls.del('vc_fm_' + fKey(D)); pintarDetalle(); },
   limpiarFotos: async () => { if (!await confirmar('¿Volver a buscar las fotos?', 'Se borran las fotos automáticas guardadas. Las que elegiste de tu galería se quedan.')) return; try { Object.keys(localStorage).filter(k => k.startsWith('vc_fa_')).forEach(k => localStorage.removeItem(k)); } catch (e) {} toast('Listo'); },
