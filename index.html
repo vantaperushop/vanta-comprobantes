@@ -126,6 +126,17 @@ const fdm = f => f ? f.slice(8, 10) + '/' + f.slice(5, 7) : '';
 const sum = (a, f) => a.reduce((s, x) => s + n(f(x)), 0);
 const row = (a, b) => `<div class="row"><span>${a}</span><span>${b}</span></div>`;
 const numV = k => 'V-' + String(k).padStart(5, '0');
+/* varios productos: EasySell los guarda en líneas; a mano se puede usar " + " */
+const partirL = v => String(v ?? '').split(/\r?\n|\s\+\s|\s*\|\s*/).map(s => s.trim()).filter(Boolean);
+const precioTotal = v => typeof v === 'number' ? v : partirL(v).reduce((s, x) => s + n(x), 0);
+function itemsDe(producto, precio) {
+  let ns = partirL(producto); if (!ns.length) ns = [String(producto ?? '').trim()];
+  const ps = typeof precio === 'number' ? [precio] : partirL(precio).map(n);
+  if (ps.length === ns.length) return ns.map((x, i) => ({nombre:x, precio:ps[i]}));
+  if (ns.length === 1) return [{nombre:ns[0], precio:ps.reduce((a, b) => a + b, 0)}];
+  return ns.map(x => ({nombre:x, precio:null}));
+}
+const nombresTxt = v => partirL(v).join(' + ') || String(v ?? '');
 const ls = {get:k => { try { return localStorage.getItem(k); } catch (e) { return null; } }, set:(k, v) => { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } }, del:k => { try { localStorage.removeItem(k); } catch (e) {} }};
 const ICON = {
   bag:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8h14l-1 12H6Z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/></svg>',
@@ -194,7 +205,7 @@ function pagosDe(p) {
   return n(p.adelantado) > 0 ? [{fecha:'', monto:n(p.adelantado), metodo:''}] : [];
 }
 function cuentas(p) {
-  const precio = n(p.precio), total = n(p.total) > 0 ? n(p.total) : precio, pagos = pagosDe(p), pagado = sum(pagos, x => x.monto);
+  const precio = precioTotal(p.precio), total = n(p.total) > 0 ? n(p.total) : precio, pagos = pagosDe(p), pagado = sum(pagos, x => x.monto);
   return {precio, envio:Math.max(0, r2(total - precio)), total, pagos, pagado, resta:Math.max(0, r2(total - pagado))};
 }
 function grupo(p) {
@@ -221,6 +232,24 @@ async function fotoDe(p) {
   const a = ls.get('vc_fa_' + k); if (a !== null) return a === '-' ? '' : a;
   try { const j = await api('foto', {sku:p.sku, nombre:p.producto}); ls.set('vc_fa_' + k, j.foto || '-'); return j.foto || ''; }
   catch (e) { return ''; }
+}
+async function fotosDe(list, sku) { return Promise.all(list.map(async it => loadImg(await fotoDe({sku:list.length === 1 ? sku : '', producto:it.nombre})))); }
+function pintarItems(ctx, y, list, fotos, k) {
+  const {P, R, font, wrap, rrect, sku} = k, uno = list.length === 1, sz = uno ? 160 : 120;
+  list.forEach((it, i) => {
+    const top = y - 34, foto = fotos[i], tx = foto ? P + sz + 30 : P;
+    if (foto) { ctx.save(); rrect(P, top, sz, sz, 18); ctx.clip(); const s = Math.max(sz / foto.width, sz / foto.height), w = foto.width * s, h = foto.height * s; ctx.fillStyle = '#f2f2f2'; ctx.fillRect(P, top, sz, sz); ctx.drawImage(foto, P + (sz - w) / 2, top + (sz - h) / 2, w, h); ctx.restore(); }
+    const fs = uno ? 38 : 32, lh = uno ? 46 : 40, pr = !uno && it.precio !== null ? S_(it.precio) : '';
+    font(fs, true); const pw = pr ? ctx.measureText(pr).width + 30 : 0;
+    ctx.fillStyle = '#111'; ctx.textAlign = 'left';
+    const nl = wrap(it.nombre, R - tx - pw).slice(0, uno ? 2 : 3);
+    nl.forEach((l, j) => ctx.fillText(l, tx, top + 52 + j * lh));
+    if (pr) { ctx.textAlign = 'right'; ctx.fillText(pr, R, top + 52); ctx.textAlign = 'left'; }
+    let bottom = top + 52 + nl.length * lh;
+    if (uno && sku) { font(30); ctx.fillStyle = '#777'; ctx.fillText('SKU ' + sku, tx, bottom + 6); bottom += 40; }
+    y = Math.max(foto ? top + sz : 0, bottom + 20) + (i < list.length - 1 ? 44 : 70);
+  });
+  return y;
 }
 function comprimir(file) {
   return new Promise((res, rej) => {
@@ -264,7 +293,7 @@ function vPedidos() {
   const list = vis.filter(p => grupo(p) === S.fil && (!q || [p.nombre, p.tel, p.producto, p.sku, p.ciudad].join(' ').toLowerCase().includes(q))).sort((a, b) => b.row - a.row);
   return `<button class="btn" data-act="nuevo" style="margin-bottom:10px">+ Nuevo pedido</button><div class="chips">${[['atender', 'Por atender'], ['adelantados', 'Adelantados'], ['pagados', 'Pagados']].map(([k, l]) => `<button class="chip ${S.fil === k ? 'on' : ''}" data-act="fil" data-v="${k}">${l} (${cnt(k)})</button>`).join('')}</div>
   <input class="search" id="q" placeholder="Buscar por nombre, teléfono o producto" value="${esc(S.q)}">
-  ${list.map(p => { const c = cuentas(p), g = grupo(p), est = p.estado || 'Nuevo'; return `<div class="card" data-act="abrir" data-id="${esc(p.id)}"><div class="ctop"><div style="min-width:0"><div class="t">${esc(p.nombre || 'Sin nombre')}</div><div class="s">${p.pedido ? esc(p.pedido) + ' · ' : ''}${esc(p.producto)}${p.ciudad || p.prov ? ' · ' + esc(p.ciudad || p.prov) : ''}</div></div><div class="amt">${S_(c.total)}</div></div><span class="badge ${g === 'pagados' ? 'b-ok' : g === 'adelantados' ? 'b-blue' : 'b-warn'}">${esc(est)}</span>${g === 'adelantados' ? `<span class="s" style="margin-left:6px">Saldo pendiente ${S_(c.resta)}</span>` : ''}</div>`; }).join('') || '<div class="empty">No hay pedidos aquí.</div>'}`;
+  ${list.map(p => { const c = cuentas(p), g = grupo(p), est = p.estado || 'Nuevo'; return `<div class="card" data-act="abrir" data-id="${esc(p.id)}"><div class="ctop"><div style="min-width:0"><div class="t">${esc(p.nombre || 'Sin nombre')}</div><div class="s">${p.pedido ? esc(p.pedido) + ' · ' : ''}${esc(nombresTxt(p.producto))}${p.ciudad || p.prov ? ' · ' + esc(p.ciudad || p.prov) : ''}</div></div><div class="amt">${S_(c.total)}</div></div><span class="badge ${g === 'pagados' ? 'b-ok' : g === 'adelantados' ? 'b-blue' : 'b-warn'}">${esc(est)}</span>${g === 'adelantados' ? `<span class="s" style="margin-left:6px">Saldo pendiente ${S_(c.resta)}</span>` : ''}</div>`; }).join('') || '<div class="empty">No hay pedidos aquí.</div>'}`;
 }
 function vMas() {
   return `<div class="block"><h3>Conexión</h3><div class="hint" style="margin:0 0 10px">Conectado a tu hoja de Google (pestaña orders). Los pedidos cancelados, rechazados y con error no se muestran.</div><button class="btn sec" data-act="desconectar">Cambiar enlace o clave</button></div>
@@ -285,12 +314,12 @@ function vFichas() {
   const list = S.fichas.filter(f => !q || [f.nombre, f.pedido, f.celular, f.producto, f.dni].join(' ').toLowerCase().includes(q));
   return `<div class="hint" style="margin:0 0 10px">Clientes que ya confirmaron sus datos de envío en el formulario. Toca uno para generar su ficha.</div>
   <input class="search" id="fq" placeholder="Buscar por nombre, pedido o producto" value="${esc(S.fq)}">
-  ${list.map(f => { const ag = partirAgencia(f.agencia); return `<div class="card" data-act="ficha" data-id="${esc(f.row)}"><div class="ctop"><div style="min-width:0"><div class="t">${esc(f.nombre || 'Sin nombre')}</div><div class="s">${esc(f.pedido)} · ${esc(f.producto)}</div><div class="s">${f.lima ? 'Delivery Lima · ' + esc(f.ciudad) : 'Shalom · ' + esc(ag.nombre)}</div></div><div class="amt">${S_(n(f.total) || n(f.precio))}</div></div><span class="badge b-ok">Datos confirmados${f.fecha ? ' · ' + fFecha(f.fecha) : ''}</span></div>`; }).join('') || '<div class="empty">Aún no hay clientes con datos confirmados.</div>'}`;
+  ${list.map(f => { const ag = partirAgencia(f.agencia); return `<div class="card" data-act="ficha" data-id="${esc(f.row)}"><div class="ctop"><div style="min-width:0"><div class="t">${esc(f.nombre || 'Sin nombre')}</div><div class="s">${esc(f.pedido)} · ${esc(nombresTxt(f.producto))}</div><div class="s">${f.lima ? 'Delivery Lima · ' + esc(f.ciudad) : 'Shalom · ' + esc(ag.nombre)}</div></div><div class="amt">${S_(n(f.total) || precioTotal(f.precio))}</div></div><span class="badge b-ok">Datos confirmados${f.fecha ? ' · ' + fFecha(f.fecha) : ''}</span></div>`; }).join('') || '<div class="empty">Aún no hay clientes con datos confirmados.</div>'}`;
 }
 async function dibujarFicha(f) {
-  const foto = await loadImg(await fotoDe({sku:f.sku, producto:f.producto}));
+  const list = itemsDe(f.producto, f.precio), fotos = await fotosDe(list, f.sku);
   const ag = partirAgencia(f.agencia), lima = !!f.lima;
-  const precio = n(f.precio) || n(f.total), total = n(f.total) > 0 ? n(f.total) : precio, envio = Math.max(0, r2(total - precio));
+  const precio = precioTotal(f.precio) || n(f.total), total = n(f.total) > 0 ? n(f.total) : precio, envio = Math.max(0, r2(total - precio));
   const W = 1080, P = 80, R = W - P, F = '-apple-system,Roboto,"Segoe UI",Arial,sans-serif';
   const pass = ctx => {
     ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, ctx.canvas.height); ctx.textBaseline = 'alphabetic';
@@ -328,11 +357,8 @@ async function dibujarFicha(f) {
       if (ag.dir) rowL('Dirección', ag.dir);
     }
     sep();
-    const top = y - 34, tx = foto ? P + 190 : P;
-    if (foto) { ctx.save(); rrect(P, top, 160, 160, 18); ctx.clip(); const s = Math.max(160 / foto.width, 160 / foto.height), w = foto.width * s, h = foto.height * s; ctx.fillStyle = '#f2f2f2'; ctx.fillRect(P, top, 160, 160); ctx.drawImage(foto, P + (160 - w) / 2, top + (160 - h) / 2, w, h); ctx.restore(); }
-    font(38, true); ctx.fillStyle = '#111'; const nl = wrap(f.producto, R - tx).slice(0, 2); nl.forEach((l, i) => ctx.fillText(l, tx, top + 52 + i * 46));
-    y = Math.max(foto ? top + 160 : 0, top + 52 + nl.length * 46 + 20) + 70;
-    rowL('Precio', S_(precio));
+    y = pintarItems(ctx, y, list, fotos, {P, R, font, wrap, rrect});
+    rowL(list.length > 1 ? 'Subtotal' : 'Precio', S_(precio));
     rowL(lima ? 'Envío (Lima)' : 'Envío (Provincia)', envio > 0 ? S_(envio) : 'Gratis');
     rowL('Total', S_(total), {size:40, bold:true, lc:'#111', gap:62});
     const bh = 150;
@@ -378,26 +404,35 @@ async function abrirFichaObj(f) {
 function abrir(id) {
   const p = getP(id); if (!p) return;
   const c = cuentas(p), co = p.comp || {};
-  S.D = {id, pedido:p.pedido || '', nombre:p.nombre, tel:p.tel, dir:p.dir, ref:p.ref, producto:p.producto, sku:p.sku, precio:c.precio, envio:c.envio,
+  S.D = {id, pedido:p.pedido || '', nombre:p.nombre, tel:p.tel, dir:p.dir, ref:p.ref, producto:p.producto, sku:p.sku, precio:c.precio, envio:c.envio, items:itemsDe(p.producto, p.precio), precioBase:c.precio,
     modo:co.modo || (esLima(p) ? 'lima' : 'shalom'), ciudad:co.ciudad || p.ciudad || p.prov || '', titulo:co.titulo || '', texto:co.texto || '', pagos:c.pagos, num:co.num || 0};
   S.view = id; render(); pintarDetalle(); window.scrollTo(0, 0);
 }
 function leer() {
   const D = S.D, v = id => { const e = $('#' + id); return e ? e.value.trim() : ''; };
-  Object.assign(D, {nombre:v('f_nom'), tel:v('f_tel'), dir:v('f_dir'), ref:v('f_ref'), producto:v('f_pro'), sku:v('f_sku'), precio:n(v('f_pre')), envio:n(v('f_env')), ciudad:v('f_ciu'), titulo:v('f_tit'), texto:v('f_txt')});
+  Object.assign(D, {nombre:v('f_nom'), tel:v('f_tel'), dir:v('f_dir'), ref:v('f_ref'), sku:v('f_sku'), envio:n(v('f_env')), ciudad:v('f_ciu'), titulo:v('f_tit'), texto:v('f_txt')});
+  const its = [];
+  $('#view').querySelectorAll('[data-it]').forEach(el => { const i = el.dataset.it, pv = v('f_pre_' + i); its.push({nombre:v('f_pro_' + i), precio:pv === '' ? null : n(pv)}); });
+  if (its.length) D.items = its;
+  D.producto = D.items.map(x => x.nombre).filter(Boolean).join('\n');
+  const conPrecio = D.items.filter(x => x.precio !== null && x.precio > 0);
+  D.precio = conPrecio.length ? sum(conPrecio, x => x.precio) : n(D.precioBase);
   return D;
 }
 const totD = D => { const total = r2(n(D.precio) + n(D.envio)), pagado = r2(sum(D.pagos, x => x.monto)); return {total, pagado, resta:Math.max(0, r2(total - pagado))}; };
 function pintarDetalle() {
-  const D = S.D, p = getP(D.id), t = totD(D), sinPagos = !D.pagos.length;
+  const D = S.D, p = getP(D.id), t = totD(D), sinPagos = !D.pagos.length, uno = D.items.length === 1;
   $('#view').innerHTML = `<button class="back" data-act="cerrar">← Pedidos</button>
   <div class="block"><h3>Cliente</h3><div class="g2"><div><label>Nombre</label><input id="f_nom" value="${esc(D.nombre)}"></div><div><label>Teléfono</label><input id="f_tel" type="tel" value="${esc(D.tel)}"></div></div>
     <label>Dirección</label><input id="f_dir" value="${esc(D.dir)}"><label>Referencia</label><textarea id="f_ref">${esc(D.ref)}</textarea>
     <div class="hint">${D.pedido ? 'Pedido <b>' + esc(D.pedido) + '</b> · ' : ''}Estado en tu hoja: <b>${esc(p.estado || 'sin estado')}</b>${D.num ? ' · Comprobante ' + numV(D.num) : ''}</div></div>
   ${bloqueEnvio(p)}
-  <div class="block"><h3>Producto</h3><div class="foto"><div class="img" id="f_img">Buscando…</div><div style="flex:1"><label class="filebtn">Elegir foto<input type="file" accept="image/*" id="f_file"></label>${fotoManual(p) ? '<button class="mini mt" data-act="quitarFoto">Quitar foto elegida</button>' : ''}</div></div>
-    <label>Producto</label><input id="f_pro" value="${esc(D.producto)}"><label>SKU</label><input id="f_sku" value="${esc(D.sku)}">
-    <label>Precio (S/)</label><input id="f_pre" type="number" inputmode="decimal" step="0.01" value="${D.precio || ''}">
+  <div class="block"><h3>${uno ? 'Producto' : 'Productos (' + D.items.length + ')'}</h3>
+    ${uno ? `<div class="foto"><div class="img" id="f_img">Buscando…</div><div style="flex:1"><label class="filebtn">Elegir foto<input type="file" accept="image/*" id="f_file"></label>${fotoManual(p) ? '<button class="mini mt" data-act="quitarFoto">Quitar foto elegida</button>' : ''}</div></div>` : ''}
+    ${D.items.map((it, i) => `<div data-it="${i}"${uno ? '' : ' class="caja"'}>${uno ? '' : `<div class="foto" style="gap:10px"><div class="img" id="f_img_${i}" style="width:52px;height:52px;border-radius:8px">…</div><div style="flex:1;font-weight:700">Producto ${i + 1}</div><button class="mini" data-act="delItem" data-v="${i}">Quitar</button></div>`}
+      <label>Producto</label><input id="f_pro_${i}" value="${esc(it.nombre)}"><label>Precio (S/)</label><input id="f_pre_${i}" type="number" inputmode="decimal" step="0.01" value="${it.precio !== null && it.precio !== undefined && it.precio !== 0 ? it.precio : ''}" placeholder="${uno ? '' : 'Escribe el precio'}"></div>`).join('')}
+    <button class="btn ghost sm mt" data-act="addItem">+ Agregar otro producto</button>
+    ${uno ? `<label>SKU</label><input id="f_sku" value="${esc(D.sku)}">` : `<input id="f_sku" type="hidden" value="${esc(D.sku)}">`}
     <label>Envío (S/)</label><input id="f_env" type="number" inputmode="decimal" step="0.01" value="${D.envio || ''}">
     <div class="row mt"><span><b>Total</b></span><span><b id="f_tot">${S_(t.total)}</b></span></div></div>
   <div class="block"><h3>Entrega</h3>${chipsHTML('f_ent', ENTREGAS, D.modo)}
@@ -416,8 +451,12 @@ function pintarDetalle() {
   if ($('#b_m')) S.metB = metodoBind(v, 'b');
   prev();
   S.envD = bindEnvio(v, 'd', esLimaMet(p), {dni:p.dni, recibe:p.recibe, dniRecibe:p.dniRecibe, agencia:p.agencia});
-  $('#f_file').addEventListener('change', async e => { const f = e.target.files && e.target.files[0]; if (!f) return; try { const d = await comprimir(f); if (!ls.set('vc_fm_' + fKey({sku:$('#f_sku').value, producto:$('#f_pro').value}), d)) return toast('No hay espacio para guardar la foto', 'warn'); leer(); pintarDetalle(); toast('Foto guardada'); } catch (x) { err(x); } });
-  fotoDe({sku:D.sku, producto:D.producto}).then(src => { const el = $('#f_img'); if (!el) return; if (src) { el.style.backgroundImage = 'url(' + src + ')'; el.textContent = ''; } else el.textContent = 'Sin foto'; });
+  if (uno) {
+    $('#f_file').addEventListener('change', async e => { const f = e.target.files && e.target.files[0]; if (!f) return; try { const d = await comprimir(f); if (!ls.set('vc_fm_' + fKey({sku:$('#f_sku').value, producto:$('#f_pro_0').value}), d)) return toast('No hay espacio para guardar la foto', 'warn'); leer(); pintarDetalle(); toast('Foto guardada'); } catch (x) { err(x); } });
+    fotoDe({sku:D.sku, producto:D.items[0].nombre}).then(src => { const el = $('#f_img'); if (!el) return; if (src) { el.style.backgroundImage = 'url(' + src + ')'; el.textContent = ''; } else el.textContent = 'Sin foto'; });
+  } else {
+    D.items.forEach((it, i) => { if (!it.nombre) return; fotoDe({sku:'', producto:it.nombre}).then(src => { const el = $('#f_img_' + i); if (!el) return; if (src) { el.style.backgroundImage = 'url(' + src + ')'; el.textContent = ''; } else el.textContent = '—'; }); });
+  }
 }
 function prev() {
   const D = leer(), t = totD(D), b = caja({...D, ...t});
@@ -426,11 +465,13 @@ function prev() {
 }
 async function guardarD() {
   const D = leer(), p = getP(D.id), t = totD(D);
+  if (!D.producto) throw new Error('Escribe el producto');
   if (D.modo === 'pers' && !D.titulo && !D.texto && t.resta > 0) throw new Error('Escribe el título o el texto personalizado');
-  const b = {id:p.id, row:p.row, datos:{nombre:D.nombre, tel:D.tel, dir:D.dir, ref:D.ref, producto:D.producto, sku:D.sku, precio:r2(D.precio), total:t.total}, comp:{modo:D.modo, ciudad:D.ciudad, titulo:D.titulo, texto:D.texto, pagos:D.pagos}};
+  const precioHoja = D.items.length > 1 && D.items.every(x => x.precio !== null && x.precio > 0) ? D.items.map(x => r2(x.precio)).join('\n') : r2(D.precio);
+  const b = {id:p.id, row:p.row, datos:{nombre:D.nombre, tel:D.tel, dir:D.dir, ref:D.ref, producto:D.producto, sku:D.sku, precio:precioHoja, total:t.total}, comp:{modo:D.modo, ciudad:D.ciudad, titulo:D.titulo, texto:D.texto, pagos:D.pagos}};
   if (D.pagos.length) { b.estado = t.resta <= 0 ? 'pagado el total' : 'monto adelantado'; b.adelantado = t.pagado; b.cobrar = t.resta; }
   const j = await api('guardar', b);
-  Object.assign(p, {nombre:D.nombre, tel:D.tel, dir:D.dir, ref:D.ref, producto:D.producto, sku:D.sku, precio:r2(D.precio), total:t.total, comp:{...b.comp, num:j.num}});
+  Object.assign(p, {nombre:D.nombre, tel:D.tel, dir:D.dir, ref:D.ref, producto:D.producto, sku:D.sku, precio:precioHoja, total:t.total, comp:{...b.comp, num:j.num}});
   if (b.estado) Object.assign(p, {estado:b.estado, adelantado:b.adelantado, cobrar:b.cobrar});
   D.num = j.num;
   return D;
@@ -557,27 +598,31 @@ async function compartirEnlace(p) {
   if (navigator.share) { try { await navigator.share({text:textoForm(p)}); } catch (e) {} return; }
   copiarEnlace(textoForm(p));
 }
+const filaNuevo = i => `<div class="g2" data-ni="${i}"><div><label>${i ? 'Producto ' + (i + 1) : 'Producto'}</label><input id="n_pro_${i}" placeholder="Ej: Crossbody Tommy Hilfiger"></div><div><label>Precio (S/)</label><input id="n_pre_${i}" type="number" inputmode="decimal" step="0.01"></div></div>`;
 function nuevoPedido() {
   const ov = sheet('Nuevo pedido', `<div class="block"><h3>Cliente</h3><div class="g2"><div><label>Nombre completo</label><input id="n_nom"></div><div><label>Celular</label><input id="n_tel" type="tel" placeholder="987654321"></div></div></div>
   <div class="block"><h3>Envío</h3>${chipsHTML('n_tipo', [['L', 'Lima (delivery)'], ['P', 'Provincia (Shalom)']], 'L')}
     <div id="n_lw"><label>Distrito</label><select id="n_dis">${opciones(DISTRITOS, '', 'Elige el distrito')}</select><label>Dirección</label><input id="n_dir"><label>Referencia</label><input id="n_ref"></div>
     <div id="n_pw" style="display:none"><label>Departamento</label><select id="n_dep">${opciones(DEPARTAMENTOS, '', 'Elige el departamento')}</select><label>Ciudad / distrito</label><input id="n_ciu"></div></div>
-  <div class="block"><h3>Producto</h3><label>Producto</label><input id="n_pro" placeholder="Ej: Crossbody Tommy Hilfiger"><label>SKU (opcional)</label><input id="n_sku">
-    <div class="g2"><div><label>Precio (S/)</label><input id="n_pre" type="number" inputmode="decimal" step="0.01"></div><div><label>Envío (S/)</label><input id="n_env" type="number" inputmode="decimal" step="0.01" placeholder="0 = gratis"></div></div></div>
+  <div class="block"><h3>Productos</h3><div id="n_items">${filaNuevo(0)}</div><button class="btn ghost sm mt" id="n_add" type="button">+ Agregar otro producto</button>
+    <div class="g2"><div><label>SKU (opcional)</label><input id="n_sku"></div><div><label>Envío (S/)</label><input id="n_env" type="number" inputmode="decimal" step="0.01" placeholder="0 = gratis"></div></div></div>
   <div class="block"><h3>Datos de envío (opcional)</h3><div class="hint" style="margin:0 0 4px">Si el cliente ya te pasó su DNI (y su agencia si es provincia), ponlos aquí y la ficha queda lista. Si no, déjalo vacío y luego le mandas el formulario.</div>${envioCampos('n', true)}</div>
   <button class="btn" id="n_ok">Guardar pedido</button>`);
   const body = ov.querySelector('.body');
   let tipo = 'L';
+  body.querySelector('#n_add').onclick = () => { const k = body.querySelectorAll('[data-ni]').length; body.querySelector('#n_items').insertAdjacentHTML('beforeend', filaNuevo(k)); };
   const env = bindEnvio(body, 'n', true, {}, a => { marcarSelect(body.querySelector('#n_dep'), propio(a.depto)); body.querySelector('#n_ciu').value = propio(a.dist); });
   chipsBind(body, 'n_tipo', v => { tipo = v; body.querySelector('#n_lw').style.display = v === 'L' ? 'block' : 'none'; body.querySelector('#n_pw').style.display = v === 'P' ? 'block' : 'none'; env.setLima(v === 'L'); });
   body.querySelector('#n_ok').onclick = async () => {
     const g = id => body.querySelector('#' + id).value.trim();
     try {
-      const datos = {nombre:g('n_nom'), tel:g('n_tel'), tipo, producto:g('n_pro'), sku:g('n_sku'), precio:n(g('n_pre')), envio:n(g('n_env')),
+      const its = [...body.querySelectorAll('[data-ni]')].map(el => { const i = el.dataset.ni; return {nombre:g('n_pro_' + i), precio:n(g('n_pre_' + i))}; }).filter(x => x.nombre || x.precio);
+      if (!its.length) throw new Error('Escribe el producto');
+      if (its.some(x => !x.nombre)) throw new Error('Escribe el nombre de cada producto');
+      if (its.some(x => x.precio <= 0)) throw new Error('Escribe el precio de cada producto');
+      const datos = {nombre:g('n_nom'), tel:g('n_tel'), tipo, producto:its.map(x => x.nombre).join('\n'), sku:g('n_sku'), precio:r2(sum(its, x => x.precio)), envio:n(g('n_env')),
         ciudad:tipo === 'L' ? g('n_dis') : g('n_ciu'), provincia:tipo === 'L' ? '' : g('n_dep'), dir:g('n_dir'), ref:g('n_ref')};
       if (!datos.nombre) throw new Error('Escribe el nombre del cliente');
-      if (!datos.producto) throw new Error('Escribe el producto');
-      if (datos.precio <= 0) throw new Error('Escribe el precio');
       if (tipo === 'L' && !datos.ciudad) throw new Error('Elige el distrito');
       if (tipo === 'P' && !datos.provincia) throw new Error('Elige el departamento');
       const envio = env.validar(false);
@@ -585,7 +630,8 @@ function nuevoPedido() {
       const j = await api('crear', {datos, envio});
       ov.remove(); toast('Pedido ' + (j.pedido || '') + ' creado');
       await cargar();
-      S.fil = 'atender'; const p = S.pedidos.find(x => x.row === j.row); if (p) abrir(p.id);
+      S.fil = 'atender'; const p = S.pedidos.find(x => x.row === j.row);
+      if (p) { abrir(p.id); if (its.length > 1) { S.D.items = its; pintarDetalle(); try { await guardarD(); pintarDetalle(); } catch (x) {} } }
     } catch (e) { err(e); const b = body.querySelector('#n_ok'); if (b) { b.disabled = false; b.textContent = 'Guardar pedido'; } }
   };
 }
@@ -593,7 +639,6 @@ function nuevoPedido() {
 /* ---------- comprobante ---------- */
 const loadImg = src => new Promise(r => { if (!src) return r(null); const i = new Image(); i.onload = () => r(i); i.onerror = () => r(null); i.src = src; });
 async function dibujar(x) {
-  const foto = await loadImg(x.foto);
   const W = 1080, P = 80, R = W - P, F = '-apple-system,Roboto,"Segoe UI",Arial,sans-serif', bx = caja(x), pagado = x.resta <= 0;
   const pass = ctx => {
     ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, ctx.canvas.height); ctx.textBaseline = 'alphabetic';
@@ -612,12 +657,8 @@ async function dibujar(x) {
     if (x.nombre) rowL('Cliente', x.nombre);
     if (x.tel) rowL('Teléfono', x.tel);
     sep();
-    const top = y - 34, tx = foto ? P + 190 : P;
-    if (foto) { ctx.save(); rrect(P, top, 160, 160, 18); ctx.clip(); const s = Math.max(160 / foto.width, 160 / foto.height), w = foto.width * s, h = foto.height * s; ctx.fillStyle = '#f2f2f2'; ctx.fillRect(P, top, 160, 160); ctx.drawImage(foto, P + (160 - w) / 2, top + (160 - h) / 2, w, h); ctx.restore(); }
-    font(38, true); ctx.fillStyle = '#111'; const nl = wrap(x.producto, R - tx).slice(0, 2); nl.forEach((l, i) => ctx.fillText(l, tx, top + 52 + i * 46));
-    if (x.sku) { font(30); ctx.fillStyle = '#777'; ctx.fillText('SKU ' + x.sku, tx, top + 52 + nl.length * 46 + 6); }
-    y = Math.max(foto ? top + 160 : 0, top + 52 + nl.length * 46 + 20) + 70;
-    rowL('Precio', S_(x.precio));
+    y = pintarItems(ctx, y, x.items, x.fotos, {P, R, font, wrap, rrect, sku:x.sku});
+    rowL(x.items.length > 1 ? 'Subtotal' : 'Precio', S_(x.precio));
     rowL('Envío' + (x.modo === 'shalom' && x.ciudad ? ' (' + x.ciudad + ')' : x.modo === 'lima' ? ' (Lima)' : ''), S_(x.envio));
     rowL('Total', S_(x.total), {size:40, bold:true, lc:'#111', gap:62});
     sep();
@@ -664,7 +705,7 @@ async function compartir(blob, name) {
 }
 async function comprobante() {
   const D = S.D, t = totD(D);
-  const x = {...D, ...t, precio:r2(D.precio), envio:r2(D.envio), foto:await fotoDe({sku:D.sku, producto:D.producto})};
+  const x = {...D, ...t, precio:r2(D.precio), envio:r2(D.envio), items:D.items, fotos:await fotosDe(D.items, D.sku)};
   const cv = await dibujar(x), base = 'Comprobante-' + numV(D.num) + (t.resta <= 0 ? '-pagado' : '');
   const ov = sheet(t.resta <= 0 ? 'Comprobante final' : 'Comprobante', `<img src="${cv.toDataURL('image/jpeg', 0.9)}" style="width:100%;border-radius:10px;border:1px solid var(--line);display:block">
   <div class="actions"><button class="btn sec" data-k="img-dl">Descargar imagen</button><button class="btn" data-k="img-sh">Compartir imagen</button></div>
@@ -708,6 +749,8 @@ const ACT = {
   saldo: () => conBoton('saldo', async () => { const pg = nuevoPago('b'); leer(); S.D.pagos.push(pg); try { await guardarD(); } catch (e) { S.D.pagos.pop(); throw e; } pintarDetalle(); toast(totD(S.D).resta <= 0 ? 'Pagado' : 'Pago registrado'); await comprobante(); }),
   generar: () => conBoton('generar', async () => { await guardarD(); pintarDetalle(); await comprobante(); }),
   editPago: (id, v) => editPago(v),
+  addItem: () => { leer(); S.D.items.push({nombre:'', precio:null}); pintarDetalle(); },
+  delItem: (id, v) => { leer(); if (S.D.items.length > 1) S.D.items.splice(+v, 1); pintarDetalle(); },
   quitarFoto: () => { const D = leer(); ls.del('vc_fm_' + fKey(D)); pintarDetalle(); },
   limpiarFotos: async () => { if (!await confirmar('¿Volver a buscar las fotos?', 'Se borran las fotos automáticas guardadas. Las que elegiste de tu galería se quedan.')) return; try { Object.keys(localStorage).filter(k => k.startsWith('vc_fa_')).forEach(k => localStorage.removeItem(k)); } catch (e) {} toast('Listo'); },
   desconectar: async () => { if (!await confirmar('¿Cambiar enlace o clave?', 'Tendrás que conectar otra vez.')) return; ls.del('vc_cfg'); CFG = null; S.pedidos = []; mostrar(); }
@@ -719,7 +762,7 @@ $('#view').addEventListener('click', e => {
 $('#view').addEventListener('input', e => {
   if (e.target.id === 'q') { S.q = e.target.value; render(); return; }
   if (e.target.id === 'fq') { S.fq = e.target.value; render(); return; }
-  if (S.view && ['f_pre', 'f_env', 'f_ciu', 'f_tit', 'f_txt'].includes(e.target.id)) prev();
+  if (S.view && (['f_env', 'f_ciu', 'f_tit', 'f_txt'].includes(e.target.id) || /^f_pre_/.test(e.target.id))) prev();
 });
 
 /* ---------- botón atrás del celular ---------- */
