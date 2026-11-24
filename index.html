@@ -407,11 +407,24 @@ async function abrirFichaObj(f) {
 }
 
   /* ---------- detalle del pedido ---------- */
+const lugarDe = p => { const c = String(p.ciudad || '').trim(), d = String(p.prov || '').trim(); return c && d && c.toLowerCase() !== d.toLowerCase() ? c + ', ' + d : (c || d); };
+function ciudadDe(p) {
+  if (p.agencia) { const z = partirAgencia(p.agencia).zona.split(' / ').filter(Boolean); if (z.length) return propio(z[z.length - 1]) + (z.length > 1 ? ', ' + propio(z[0]) : ''); }
+  return lugarDe(p);
+}
+/* datos de envío como en la ficha (Lima o agencia Shalom) */
+function envioFilas(p, D) {
+  const lima = D && D.modo ? (D.modo === 'lima' || (D.modo === 'pers' && esLimaMet(p))) : esLimaMet(p);
+  const dir = D ? D.dir : p.dir, ref = D ? D.ref : p.ref;
+  if (lima) return [['Tipo de envío', 'Delivery Lima'], ['Distrito', p.ciudad], ['Dirección', dir], ['Referencia', ref]].filter(x => x[1]);
+  if (p.agencia) { const ag = partirAgencia(p.agencia); return [['Tipo de envío', 'Agencia Shalom'], ['Agencia', ag.nombre], ['Ubicación', ag.zona], ['Dirección', ag.dir]].filter(x => x[1]); }
+  return [['Tipo de envío', 'Agencia Shalom'], ['Departamento', p.prov], ['Ciudad', p.ciudad], ['Agencia', 'Por elegir']].filter(x => x[1]);
+}
 function abrir(id) {
   const p = getP(id); if (!p) return;
   const c = cuentas(p), co = p.comp || {};
   S.D = {id, pedido:p.pedido || '', nombre:p.nombre, tel:p.tel, dir:p.dir, ref:p.ref, producto:p.producto, sku:p.sku, precio:c.precio, envio:c.envio, items:itemsDe(p.producto, p.precio), precioBase:c.precio,
-    modo:co.modo || (esLima(p) ? 'lima' : 'shalom'), ciudad:co.ciudad || p.ciudad || p.prov || '', titulo:co.titulo || '', texto:co.texto || '', pagos:c.pagos, num:co.num || 0};
+    modo:co.modo || (esLima(p) ? 'lima' : 'shalom'), ciudad:co.ciudad || ciudadDe(p), titulo:co.titulo || '', texto:co.texto || '', pagos:c.pagos, num:co.num || 0};
   S.view = id; render(); pintarDetalle(); window.scrollTo(0, 0);
 }
 function leer() {
@@ -441,7 +454,7 @@ function pintarDetalle() {
     ${uno ? `<label>SKU</label><input id="f_sku" value="${esc(D.sku)}">` : `<input id="f_sku" type="hidden" value="${esc(D.sku)}">`}
     <label>Envío (S/)</label><input id="f_env" type="number" inputmode="decimal" step="0.01" value="${D.envio || ''}">
     <div class="row mt"><span><b>Total</b></span><span><b id="f_tot">${S_(t.total)}</b></span></div></div>
-  <div class="block"><h3>Entrega</h3>${chipsHTML('f_ent', ENTREGAS, D.modo)}
+  <div class="block"><h3>Entrega</h3><div class="caja" id="f_envres" style="margin:0 0 10px">${envioFilas(p, D).map(([a, b]) => row(esc(a), '<b>' + esc(b) + '</b>')).join('')}</div>${chipsHTML('f_ent', ENTREGAS, D.modo)}
     <div id="w_ciu" style="display:${D.modo === 'shalom' ? 'block' : 'none'}"><label>Ciudad (agencia Shalom)</label><input id="f_ciu" value="${esc(D.ciudad)}"></div>
     <div id="w_pers" style="display:${D.modo === 'pers' ? 'block' : 'none'}"><label>Título</label><input id="f_tit" value="${esc(D.titulo)}" placeholder="Pago en dos partes"><label>Texto</label><textarea id="f_txt" placeholder="S/ 100.00 el 25/11 y el resto al recibir tu pedido.">${esc(D.texto)}</textarea></div>
     <div class="caja" id="f_caja"></div></div>
@@ -466,7 +479,8 @@ function pintarDetalle() {
   }
 }
 function prev() {
-  const D = leer(), t = totD(D), b = caja({...D, ...t});
+  const D = leer(), t = totD(D), b = caja({...D, ...t}), pp = getP(D.id), er = $('#f_envres');
+  if (er && pp) er.innerHTML = envioFilas(pp, D).map(([a, c]) => row(esc(a), '<b>' + esc(c) + '</b>')).join('');
   $('#f_tot').textContent = S_(t.total);
   $('#f_caja').innerHTML = `<b>${esc(b.t) || '—'}</b><br>${esc(b.s)}`;
 }
@@ -655,7 +669,13 @@ async function dibujar(x) {
     const wrap = (t, maxW) => { const out = []; String(t || '').split('\n').forEach(par => { let line = ''; par.split(' ').forEach(w => { const tst = line ? line + ' ' + w : w; if (ctx.measureText(tst).width > maxW && line) { out.push(line); line = w; } else line = tst; }); out.push(line); }); return out; };
     const rrect = (x0, y0, w, h, r) => { ctx.beginPath(); ctx.moveTo(x0 + r, y0); ctx.arcTo(x0 + w, y0, x0 + w, y0 + h, r); ctx.arcTo(x0 + w, y0 + h, x0, y0 + h, r); ctx.arcTo(x0, y0 + h, x0, y0, r); ctx.arcTo(x0, y0, x0 + w, y0, r); ctx.closePath(); };
     let y = 120;
-    const rowL = (l, v, o = {}) => { font(o.size || 32, o.bold); ctx.fillStyle = o.lc || '#777'; ctx.textAlign = 'left'; ctx.fillText(l, P, y); font(o.size || 32, o.bold || o.vb); ctx.fillStyle = o.vc || '#111'; ctx.textAlign = 'right'; ctx.fillText(v, R, y); ctx.textAlign = 'left'; y += o.gap || 54; };
+    const rowL = (l, v, o = {}) => {
+      const size = o.size || 32; font(size, o.bold); const lw = ctx.measureText(l).width;
+      ctx.fillStyle = o.lc || '#777'; ctx.textAlign = 'left'; ctx.fillText(l, P, y);
+      font(size, o.bold || o.vb); ctx.fillStyle = o.vc || '#111'; ctx.textAlign = 'right';
+      const lines = wrap(v, R - P - lw - 40); lines.forEach((ln, i) => { if (i) y += size * 1.3; ctx.fillText(ln, R, y); });
+      ctx.textAlign = 'left'; y += o.gap || 54;
+    };
     const sep = () => { ctx.save(); ctx.strokeStyle = '#cfcfcf'; ctx.lineWidth = 2; ctx.setLineDash([12, 10]); ctx.beginPath(); ctx.moveTo(P, y - 12); ctx.lineTo(R, y - 12); ctx.stroke(); ctx.restore(); y += 44; };
     spaced('VANTA', y, 96, 30, '#111', true); y += 62;
     spaced('COMPROBANTE DE COMPRA', y, 28, 7, '#777'); y += 84;
@@ -664,9 +684,10 @@ async function dibujar(x) {
     if (x.nombre) rowL('Cliente', x.nombre);
     if (x.tel) rowL('Teléfono', x.tel);
     sep();
+    if (x.envioRows && x.envioRows.length) { x.envioRows.forEach(([a, b]) => rowL(a, b)); sep(); }
     y = pintarItems(ctx, y, x.items, x.fotos, {P, R, font, wrap, rrect, sku:x.sku});
     rowL(x.items.length > 1 ? 'Subtotal' : 'Precio', S_(x.precio));
-    rowL('Envío' + (x.modo === 'shalom' && x.ciudad ? ' (' + x.ciudad + ')' : x.modo === 'lima' ? ' (Lima)' : ''), S_(x.envio));
+    rowL(x.modo === 'lima' ? 'Envío (Lima)' : x.modo === 'shalom' ? 'Envío (Provincia)' : 'Envío', x.envio > 0 ? S_(x.envio) : 'Gratis');
     rowL('Total', S_(x.total), {size:40, bold:true, lc:'#111', gap:62});
     sep();
     x.pagos.forEach((p, i) => rowL([p.fecha ? fdm(p.fecha) : '', i === 0 ? 'Adelanto' : 'Pago restante', p.metodo || ''].filter(Boolean).join(' - '), S_(p.monto)));
@@ -712,7 +733,7 @@ async function compartir(blob, name) {
 }
 async function comprobante() {
   const D = S.D, t = totD(D);
-  const x = {...D, ...t, precio:r2(D.precio), envio:r2(D.envio), items:D.items, fotos:await fotosDe(D.items, D.sku)};
+  const x = {...D, ...t, precio:r2(D.precio), envio:r2(D.envio), items:D.items, fotos:await fotosDe(D.items, D.sku), envioRows:envioFilas(getP(D.id), D)};
   const cv = await dibujar(x), base = 'Comprobante-' + numV(D.num) + (t.resta <= 0 ? '-pagado' : '');
   const ov = sheet(t.resta <= 0 ? 'Comprobante final' : 'Comprobante', `<img src="${cv.toDataURL('image/jpeg', 0.9)}" style="width:100%;border-radius:10px;border:1px solid var(--line);display:block">
   <div class="actions"><button class="btn sec" data-k="img-dl">Descargar imagen</button><button class="btn" data-k="img-sh">Compartir imagen</button></div>
